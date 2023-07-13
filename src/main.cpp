@@ -14,16 +14,13 @@
 
 
 #define vibrator_PWM  40  // 40Hz makes a Magic Wand way more rumbly
-#define vibrator_max  135 // Sets top vibration (0-255) Default is lower to compensate for using 12v to supply a 10v motor
+#define vibrator_max  100 // Sets top vibration (0-255) Default is lower to compensate for using 12v to supply a 10v motor
 #define vibrator_low  35  // Tune this value to be just below where there are vibrations that can be felt 
 
 #define flick_warn_time     75 // Time in milliseconds that the vibrator will be on as a reminder
 #define flick_warn_interval 33 // [30]  Time in SECONDS Interval between reminders   
 
-#define red_time  360     // Time in MINUTES for the red light (locked up)
-
-int sleep_low = 35;  // [20] Time in MINUTES for the minimum amount of pause before next round of teasing
-int sleep_high = 70;  // [45] Time in MINUTES for the maximum amount of pause before next round of teasing
+#define red_time  45    // Time in MINUTES for the red light (locked up)
  
 #define tease_power_start     35  // Integer (0-255) - PWM power of vibrator at lowest tease
 int tease_power_inc = 13;         // Starting from "vibrator_low", how much more intese will each step be
@@ -31,7 +28,7 @@ int tease_interval_start = 120;   // [120] Time in SECONDS - between full tease
 int tease_interval_dec = 18;      // Time in SECONDS - speed up the interval by this each loop
 #define tease_wait            500 // [500] Time in millis  - time between ramp steps when teasing
 #define tease_ramp_rate       1   // how much to add to the PWM each loop
-int tease_session_qty = 10;       // How many times does speed / intesinty increase for each before resetting
+int tease_session_qty = 12;       // How many times does speed / intesinty increase for each before resetting
 
 //                                  
 //                                                      (tease_power_start)   ->  /|
@@ -60,41 +57,45 @@ int tease_session_qty = 10;       // How many times does speed / intesinty incre
 int k = 1000;            // I'm lazy and need to convert millis to seconds often
 int kM = 1000 * 60;      // even more lazy, milliseconds to minutes
 
+int hold_her = false; 
+int was_running = false;
+int hold_her_inesnity = 0;
+int next_her = 0;
+
+volatile bool vibez_on = true;     // tracks if currently allowed to vibe (not stopped by another process)
 
 
-volatile bool vibez_on = true;     // tracks if currently allowed to vibe (Not in sleep mode, not stopped by another process)
-int  current_mood = 0;    // Current output for the vibrator
-int  current_best_mood = tease_power_start;
-int  ti = 0;              // Loop increment for teasing
 
-int next_flick = millis() + (flick_warn_interval * k);  // First flick will be the interval after now
-int next_tease = millis() + (tease_interval_start * k); // First tease session will start in x seconds (default start is 120 seconds) 
-int red_over = millis() + (red_time * kM); // defines red time, for a new one reset the counter
+  int  current_mood =       0;          // Current output for the vibrator
+  int  current_best_mood =  0;
+  int  ti =                 0;          // Loop increment for teasing
+
+  int next_flick = 0;
+  int next_tease = 0; // First tease session will start in x seconds (default start is 120 seconds) 
+  int red_over = 0; // defines red time, for a new one reset the counter
 
 
-volatile int sleep_time = 0;
+void setup_vibe(){
+  current_mood = 0;
+  current_best_mood = tease_power_start;
+  ti = 0;
+
+  next_flick = millis() + (flick_warn_interval * k);  // First flick will be the interval after now
+  next_tease = millis() + (tease_interval_start * k); // First tease session will start in x seconds (default start is 120 seconds)
+  red_over = millis() + (red_time * kM); // defines red time, for a new one reset the counter
+}
+
 
 
 /////////////
 // Make some functions here that'll help out in the future
 /////////////
 
-//////////////////////
-// Here's where we pause all activites (when STAHP is smashed)
-void ICACHE_RAM_ATTR sleep_baby_sleep(){
 
-  if(vibez_on){
-    vibez_on = false;
-    current_mood = 0;
-    current_best_mood = tease_power_start;
-    red_over = millis() + (red_time * kM);
-    ledcWrite(Vibez,0);
-    sleep_time = millis() + (random(sleep_low, sleep_high) * kM);
-    LogDebug("[STAHP] Sleepy time little baby");
-  }
 
-} //sleep_baby_sleep
-//////////////////////
+
+
+
 
 //////////////////////
 // Makes a slow saw tooth ramp on the vibrator for 30 cycles -- gives about 4 minutes to cum
@@ -131,7 +132,7 @@ int flick_warn(){
 
   /////////////////////////////////////////////////////////////////
   // Hidding this reporting section here saved many lines of code. 
-  float red_time_left = constrain((red_time - millis()) / kM,0,sleep_high); 
+  float red_time_left = constrain((red_time - millis()) / kM,0,red_time); 
   float next_tease_minutes = constrain((next_tease - millis())/ kM,0,tease_interval_start);
   
   Serial.println("Vibez: " + String(vibez_on) + " Red time left: " + String(red_time_left) + " minutes");
@@ -163,10 +164,10 @@ bool after_now(int incoming_time){ // have to do a lot of time checks so that th
 
 //////////////////////
 // Helps work with an incrament in a looping value
-int i_constrain_loop(int current, int max){
+int i_constrain_loop(int current, int max, int min = 0 ){
 current = current + 1;  // advance by one
 if(current > max){      // Shit... too far?    
-    current = 0;        // Start again.
+    current = min;        // Start again.
   }
 return current;
 } // i_constrain_loop
@@ -186,8 +187,7 @@ const char* password = "gofuckyourself";
 const char* hostname = "KM_Sex_toy";
 
 
-uint16_t slider_sleep_min = 0;
-uint16_t slider_sleep_max = 0;
+
 uint16_t slider_lockup_time = 0;
 uint16_t slider_tease_qty = 0;
 
@@ -215,44 +215,7 @@ void set_red(Control* sender, int type)
 
 }
 
-void set_sleep_min(Control* sender, int type)
-{
-  int new_sleep_time = sender->value.toInt();
-  LogDebug("[Sleep MIN Adjustment] Your new minimum sleep is: " + String(new_sleep_time) + " [Minutes]");
 
-  if(new_sleep_time>sleep_high){
-
-    LogDebug("Sleep HIGH was GREATER than Sleep LOW... correcting.");
-    sleep_high = new_sleep_time;
-    ESPUI.updateSlider(slider_sleep_max,sleep_high);
-    sleep_low = new_sleep_time;
-   }else{
-    LogDebug("Sleep low was less than sleep high");
-    sleep_low = new_sleep_time;
-   }
-
-  LogDebug("Sleep Min: " + String(sleep_low) + " --- Sleep Max: " + String(sleep_high));
-}
-
-
-void set_sleep_max(Control* sender, int type)
-{
-  int new_sleep_time = sender->value.toInt();
-  LogDebug("[Sleep MIN Adjustment] Your new minimum sleep is: " + String(new_sleep_time) + " [Minutes]");
-
-  if(new_sleep_time<sleep_low){
-
-    LogDebug("Sleep HIGH was LESS THAN than sleep LOW... correcting.");
-    sleep_low = new_sleep_time;
-    ESPUI.updateSlider(slider_sleep_min,sleep_low);
-    sleep_high = new_sleep_time;
-   }else{
-    LogDebug("Sleep low was less than sleep high");
-    sleep_high = new_sleep_time;
-   }
-
-  LogDebug("Sleep Min: " + String(sleep_low) + " --- Sleep Max: " + String(sleep_high));
-}
 
 void set_tease_qty(Control* sender, int type)
 {
@@ -281,6 +244,8 @@ void set_tease_qty(Control* sender, int type)
 
 void setup() {
 
+  setup_vibe();
+
   tease_power_inc = constrain((vibrator_max-vibrator_low)/tease_session_qty,1,vibrator_max-vibrator_low);
   tease_interval_dec = constrain((tease_interval_start-5)/tease_session_qty,5,tease_interval_start);
 
@@ -307,17 +272,20 @@ void setup() {
   // Assign non PWM outputs
   /////////////
 
-   pinMode(Out2_pin,OUTPUT); // "Red Light" output, on = locked up
+   pinMode(Out3_pin,OUTPUT); // "Red Light" output, on = locked up
    LogDebug("[Start Time] Welp, you're now locked up for : " + String(red_time));
-   digitalWrite(Out2_pin,HIGH);
+   digitalWrite(Out3_pin,HIGH);
+
+   pinMode(Out2_pin,OUTPUT);
 
 
   /////////////
   // Assign Input Button
   /////////////
 
-    pinMode(Stahp_pin,INPUT_PULLUP);                             // setup the input, it has an external pull-up
-    attachInterrupt(Stahp_pin,sleep_baby_sleep,FALLING);  // because of the pull-up, we trigger on falling (start of the press)
+    pinMode(Button1,INPUT_PULLUP);                              // setup the input, it has an external pull-up
+
+
 
   /////////////
   // ESPUI things
@@ -363,10 +331,6 @@ void setup() {
 
     ESPUI.label("Session 'Lockup' Time is the ammount of time output #2 is on, we recommend a red light to signal the duration of the session. At the end of this time output #2 will release, and a 4 minute oscillating ramp will try to make you cum",ControlColor::Turquoise);
     slider_lockup_time = ESPUI.slider("Session 'Lockup' time [Minutes]", &set_red, ControlColor::Alizarin,red_time,15,360);
-    ESPUI.label("When hitting the STAHP button the system to goto sleep (teasing is off, and so is the flick warn) for a random ammount of time between these two values.",ControlColor::Turquoise);
-    slider_sleep_min = ESPUI.slider("Sleep Minimum [Minutes]", &set_sleep_min, ControlColor::Alizarin,sleep_low,15,90);
-    slider_sleep_max = ESPUI.slider("Sleep Maximum [Minutes]", &set_sleep_max, ControlColor::Alizarin,sleep_high,15,360);
-
  
 
     ESPUI.separator("Teasing values");
@@ -393,18 +357,17 @@ void setup() {
 void loop() {
 
 if(after_now(next_flick) && vibez_on){next_flick = flick_warn();}           // Flick Warn every interval
-if(after_now(red_over)){digitalWrite(Out2_pin,LOW);if(!vibez_on){vibez_on = true;}; cum_now();}             // After the red time is over, turn off the red light "lock up" output (Output 2) and give one last hurrah
-if(after_now(sleep_time) && !vibez_on){vibez_on = true; next_tease = millis() + (2*k);}  //sleep has concluded, get ready to start teasing
-//if(after_now(ESPUI_stop)){ESPUI.}
+if(after_now(red_over)){digitalWrite(Out3_pin,LOW);if(!vibez_on){vibez_on = true;}; cum_now();}             // After the red time is over, turn off the red light "lock up" output (Output 2) and give one last hurrah
+
 
 
 if(!vibez_on){
-  LogDebug("Sleep Time: " + String(sleep_time - millis()));
+
   delay(1000);
 }
 
 
-if(after_now(next_tease) && vibez_on){              // Run a teasing ramp 
+if(after_now(next_tease)){              // Run a teasing ramp 
   if(current_mood < current_best_mood){             // Have we gone as far as we can yet?
     Serial.println(current_mood);
     current_mood = current_mood + tease_ramp_rate;  // Not far enough yet, bump the mood up a bit
@@ -417,6 +380,23 @@ if(after_now(next_tease) && vibez_on){              // Run a teasing ramp
     ti = i_constrain_loop(ti,tease_session_qty);  // Loop inc that decides how frequently and how hard the vibrator turns on
     
   }
+}
+
+if(!digitalRead(Button1) && after_now(next_her)){
+
+  current_mood = hold_her_inesnity; 
+  digitalWrite(Out2_pin,true);
+  was_running = true;
+  hold_her_inesnity = i_constrain_loop(hold_her_inesnity,vibrator_max,vibrator_low);
+  delay(100);
+
+} else {
+
+  digitalWrite(Out2_pin,false);
+  if(was_running){ current_mood = 0; was_running = false; next_her = millis() + 5000; }
+  hold_her_inesnity = 0;
+  
+
 }
 
 ledcWrite(Vibez,current_mood);  // Finally, get those good vibez after we figured out what we wanted. 
