@@ -14,6 +14,8 @@
 #define Button3     35
 
 
+#define pixel_pin   17    // [16] --> Default LED Pin
+
 // Kyle's debug code from OSSM 
 
 #define DEBUG
